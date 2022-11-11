@@ -8,6 +8,7 @@ import os
 import numpy as np
 import pathlib
 from skimage import transform, exposure, filters
+from skimage.draw import polygon2mask
 from time import time
 import tqdm
 import pandas as pd
@@ -18,6 +19,7 @@ from scipy import ndimage
 import shapely
 from copy import deepcopy
 import json
+import cv2
 
 from . import feature_matcher
 from . import serial_rigid
@@ -294,7 +296,7 @@ class Slide(object):
 
     """
 
-    def __init__(self, src_f, image, val_obj, reader):
+    def __init__(self, src_f, image, val_obj, reader, anno_f=None):
         """
         Parameters
         ----------
@@ -318,6 +320,7 @@ class Slide(object):
         self.image = image
         self.val_obj = val_obj
         self.reader = reader
+        self.anno_f=anno_f
 
         # Metadata #
         self.is_rgb = reader.metadata.is_rgb
@@ -1615,7 +1618,8 @@ class Valis(object):
                  max_processed_image_dim_px=DEFAULT_MAX_PROCESSED_IMG_SIZE,
                  max_non_rigid_registartion_dim_px=DEFAULT_MAX_PROCESSED_IMG_SIZE,
                  thumbnail_size=DEFAULT_THUMBNAIL_SIZE,
-                 norm_method=DEFAULT_NORM_METHOD, qt_emitter=None):
+                 norm_method=DEFAULT_NORM_METHOD, qt_emitter=None,
+                 anno_list=None):
 
         """
         src_dir: str
@@ -1818,6 +1822,8 @@ class Valis(object):
         else:
             self.get_imgs_in_dir()
         self.set_dst_paths()
+
+        self.anno_list = anno_list
 
         # Some information may already be provided #
         self.slide_dims_dict_wh = slide_dims_dict_wh
@@ -2024,7 +2030,7 @@ class Valis(object):
 
         img_types = []
         self.size = 0
-        for f in tqdm.tqdm(self.original_img_list):
+        for i, f in enumerate(tqdm.tqdm(self.original_img_list)):
             if reader_cls is None:
                 reader_cls = slide_io.get_slide_reader(f, series=series)
 
@@ -2043,9 +2049,18 @@ class Valis(object):
             if scaling < 1:
                 vips_img = warp_tools.rescale_img(vips_img, scaling)
 
+            # XXX shrink mif patch
+            if f.endswith('.tif'):
+                resized_img = vips_img.resize(0.5)
+                padding_left = (vips_img.width - resized_img.width) // 2
+                padding_top = (vips_img.height - resized_img.height) // 2
+                vips_img = resized_img.embed(padding_left, padding_top, vips_img.width, vips_img.height, extend='background', background=0)
+
             img = warp_tools.vips2numpy(vips_img)
 
-            slide_obj = Slide(f, img, self, reader)
+            slide_anno_f = self.anno_list[i] if self.anno_list else None
+            slide_obj = Slide(f, img, self, reader, anno_f=slide_anno_f)
+
             slide_obj.crop = self.crop
             img_types.append(slide_obj.img_type)
 
@@ -2159,6 +2174,38 @@ class Valis(object):
 
         return og_mmi
 
+    def annotation2mask(self, anno_path, slide_dimensions_wh, processed_img_shape):
+        w, h = slide_dimensions_wh[0]
+        slide_shape = np.array((h, w))
+        ratio = processed_img_shape / slide_shape
+        masks = []
+        # csv annotation
+        if anno_path.endswith('.csv'):
+            df = pd.read_csv(anno_path)
+            ROI_names = df.ROI_Name.unique()
+            
+            for ROI_name in ROI_names:
+                data = df[df.ROI_Name == ROI_name]
+                roi = [[x, y] for x, y in zip(data.Y_base, data.X_base)]
+                mask = polygon2mask(processed_img_shape, roi * ratio)
+                masks.append(mask)  
+        # geojson annotation
+        elif anno_path.endswith('.geojson'):
+            with open(anno_path, 'r') as f:
+                features = json.load(f)
+            for feat in features['features']:
+                box = feat['geometry']['coordinates'][0]
+                roi = [[x, y] for y, x in box]
+                mask = polygon2mask(processed_img_shape, roi * ratio)
+                # feat['properties']['name']
+                masks.append(mask)
+        
+        overlay = masks[0]
+        for i in range(1, len(masks)):
+            overlay = np.bitwise_or(overlay, masks[i])
+        return overlay
+
+
     def process_imgs(self, brightfield_processing_cls, brightfield_processing_kwargs,
                      if_processing_cls, if_processing_kwargs):
 
@@ -2212,7 +2259,7 @@ class Valis(object):
             else:
                 level = len(slide_obj.slide_dimensions_wh) - 1
             processor = processing_cls(image=slide_obj.image, src_f=slide_obj.src_f, level=level, series=slide_obj.series)
-
+            
             try:
                 processed_img = processor.process_image(**processing_kwargs)
             except TypeError:
@@ -2224,12 +2271,43 @@ class Valis(object):
             if scaling < 1:
                 processed_img = warp_tools.rescale_img(processed_img, scaling)
 
+            if slide_obj.anno_f:
+                annotation = self.annotation2mask(slide_obj.anno_f,
+                                                slide_obj.slide_dimensions_wh, 
+                                                np.array(processed_img.shape[0:2]))
+
             if self.create_masks:
                 # Get masks #
                 pathlib.Path(self.mask_dir).mkdir(exist_ok=True, parents=True)
 
                 # Slice region from slide and process too
                 mask = processor.create_mask()
+                
+                if slide_obj.anno_f:
+                    mask = np.bitwise_and(mask, annotation)
+                    # mask = annotation
+                    root, _ = os.path.splitext(slide_obj.anno_f)
+                    fout = root + '_mask.csv'
+                    if slide_obj.src_f.endswith('.svs') and (not os.path.exists(fout)):
+                        resized_mask = cv2.resize(
+                                            mask, 
+                                            slide_obj.slide_shape_rc, 
+                                            interpolation=cv2.INTER_NEAREST,
+                                            )
+                        contours, _ = cv2.findContours(
+                                            resized_mask, 
+                                            cv2.RETR_EXTERNAL, 
+                                            cv2.CHAIN_APPROX_SIMPLE,
+                                        )
+                        dfs = []
+                        for c in contours:
+                            df = pd.DataFrame(c.squeeze(), columns=['X_base', 'Y_base'])
+                            dfs.append(df)
+                        df_all = pd.concat(dfs, ignore_index=True)
+                        
+                        df_all.to_csv(fout, index=False)
+                        np.save(root + '_mask.npy', resized_mask)
+
                 if not np.all(mask.shape == processed_img.shape[0:2]):
                     mask = warp_tools.resize_img(mask, processed_img.shape[0:2], interp_method="nearest")
 
@@ -3451,7 +3529,8 @@ class Valis(object):
 
         return self.summary_df
 
-    def register(self, brightfield_processing_cls=DEFAULT_BRIGHTFIELD_CLASS,
+    def register(self,
+                 brightfield_processing_cls=DEFAULT_BRIGHTFIELD_CLASS,
                  brightfield_processing_kwargs=DEFAULT_BRIGHTFIELD_PROCESSING_ARGS,
                  if_processing_cls=DEFAULT_FLOURESCENCE_CLASS,
                  if_processing_kwargs=DEFAULT_FLOURESCENCE_PROCESSING_ARGS,
@@ -3965,6 +4044,9 @@ class Valis(object):
         pathlib.Path(dst_dir).mkdir(exist_ok=True, parents=True)
 
         for slide_obj in tqdm.tqdm(self.slide_dict.values()):
+            print(slide_obj.name)
+            if slide_obj.name == 'S16-5903A1': continue
+            
             slide_cmap = None
             if colormap is not None:
                 chnl_names = slide_obj.reader.metadata.channel_names
@@ -3976,8 +4058,12 @@ class Valis(object):
                         msg = f'{slide_obj.name} has {len(chnl_names)} but colormap only has {len(colormap)} colors'
                         valtils.print_warning(msg)
 
+            # if self.suffix:
+            #     dst_f = os.path.join(dst_dir, slide_obj.name + '_' + self.suffix + ".ome.tiff")
+            # else:
             dst_f = os.path.join(dst_dir, slide_obj.name + ".ome.tiff")
-            slide_obj.warp_and_save_slide(dst_f=dst_f, level = level,
+            
+            slide_obj.warp_and_save_slide(dst_f, level = level,
                                           non_rigid=non_rigid,
                                           crop=crop,
                                           interp_method=interp_method,

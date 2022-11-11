@@ -1556,7 +1556,7 @@ class VipsSlideReader(SlideReader):
                 all_channels[i] = c
 
             all_dims = np.array(all_dims)
-            most_common_channel_count = stats.mode(all_channels)[0][0]
+            most_common_channel_count = stats.mode(all_channels, keepdims=True)[0][0]
             keep_idx = np.where(all_channels == most_common_channel_count)[0]
             slide_dims = all_dims[keep_idx]
 
@@ -2192,7 +2192,11 @@ def create_ome_xml(shape_xyzct, bf_dtype, is_rgb, pixel_physical_size_xyu=None, 
         else:
             colormap = default_colormap
 
-        channels = [create_channel(i, name=channel_names[i], color=colormap[channel_names[i]]) for i in range(c)]
+        # channels = [create_channel(i, name=channel_names[i], color=colormap[channel_names[i]]) for i in range(c)]
+        channels = []
+        for i in range(c):
+            new_c = create_channel(i, name=channel_names[i], color=colormap[channel_names[i]])
+            channels += [new_c]
         new_img.pixels.channels = channels
 
     new_ome = ome_types.model.OME()
@@ -2251,7 +2255,12 @@ def update_xml_for_new_img(current_ome_xml_str, new_xyzct, bf_dtype, is_rgb, ser
             if colormap is None:
                 # Get original channel colors
                 img = og_ome.images[series]
-                colormap = {c.name: c.color.as_rgb_tuple() for c in img.pixels.channels}
+                colormap = {str(c.name): c.color.as_rgb_tuple() for c in img.pixels.channels}
+                # colormap = {}
+                # for c in img.pixels.channels:
+                #     if c and c.name:
+                #         colormap[c.name] = c.color.as_rgb_tuple()
+                
                 all_rgb = set(list(colormap.values()))
                 nc = len(img.pixels.channels)
                 if len(all_rgb) == 1 and nc > 1:

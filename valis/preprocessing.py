@@ -549,7 +549,8 @@ def create_tissue_mask_from_multichannel(img, kernel_size=3):
             tissue_mask[img[..., i] > chnl_t] = 255
 
     else:
-        t = np.quantile(img, 0.01)
+        # t = np.quantile(img, 0.01)
+        t = np.quantile(img[img > 1], 0.8)
         tissue_mask[img > t] = 255
     tissue_mask = 255*ndimage.binary_fill_holes(tissue_mask).astype(np.uint8)
     concave_tissue_mask = mask2contours(tissue_mask, kernel_size=kernel_size)
