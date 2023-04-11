@@ -4044,9 +4044,6 @@ class Valis(object):
         pathlib.Path(dst_dir).mkdir(exist_ok=True, parents=True)
 
         for slide_obj in tqdm.tqdm(self.slide_dict.values()):
-            print(slide_obj.name)
-            if slide_obj.name == 'S16-5903A1': continue
-            
             slide_cmap = None
             if colormap is not None:
                 chnl_names = slide_obj.reader.metadata.channel_names
@@ -4058,9 +4055,6 @@ class Valis(object):
                         msg = f'{slide_obj.name} has {len(chnl_names)} but colormap only has {len(colormap)} colors'
                         valtils.print_warning(msg)
 
-            # if self.suffix:
-            #     dst_f = os.path.join(dst_dir, slide_obj.name + '_' + self.suffix + ".ome.tiff")
-            # else:
             dst_f = os.path.join(dst_dir, slide_obj.name + ".ome.tiff")
             
             slide_obj.warp_and_save_slide(dst_f, level = level,
