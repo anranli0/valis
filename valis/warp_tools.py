@@ -63,8 +63,9 @@ def get_ref_img_idx(img_f_list, ref_img_name=None):
     else:
         ref_img_name = valtils.get_name(os.path.split(ref_img_name)[1])
         img_names = [valtils.get_name(f).lower() for f in img_f_list]
-        name_matches = [re.search(ref_img_name.lower(), n) for n in img_names]
-        ref_img_idx = [i for i in range(n_imgs) if name_matches[i] is not None]
+        # name_matches = [re.search(ref_img_name.lower(), n) for n in img_names]
+        name_matches = [ref_img_name.lower() == n for n in img_names]
+        ref_img_idx = [i for i in range(n_imgs) if name_matches[i]]
         n_matches = len(ref_img_idx)
 
         if n_matches == 0:

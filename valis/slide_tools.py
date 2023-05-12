@@ -216,7 +216,7 @@ def um_to_px(um, um_per_px):
 def warp_slide(src_f, transformation_src_shape_rc, transformation_dst_shape_rc,
                aligned_slide_shape_rc, M=None, dxdy=None,
                level=0, series=None, interp_method="bicubic",
-               bbox_xywh=None, bg_color=None):
+               bbox_xywh=None, bg_color=None, shrink=False):
     """ Warp a slide
 
     Warp slide according to `M` and/or `non_rigid_dxdy`
@@ -270,6 +270,22 @@ def warp_slide(src_f, transformation_src_shape_rc, transformation_dst_shape_rc,
         series = reader.series
 
     vips_slide = reader.slide2vips(level=level, series=series)
+
+    # XXX shrink tif slide
+    slide_dims = reader.metadata.slide_dimensions
+    levels_in_range = np.where(slide_dims.max(axis=1) < 1024)[0]
+    if len(levels_in_range) > 0:
+        level = levels_in_range[0]
+    else:
+        level = len(slide_dims) - 1
+
+    vips_img = reader.slide2vips(level=level)
+    if shrink and src_f.endswith('.tif') and min(vips_img.width, vips_img.height) < 20000:
+        resized_slide = vips_slide.resize(0.5)
+        padding_left = (vips_slide.width - resized_slide.width) // 2
+        padding_top = (vips_slide.height - resized_slide.height) // 2
+        vips_slide = resized_slide.embed(padding_left, padding_top, vips_slide.width, vips_slide.height, extend='background', background=0)
+
     if M is None and dxdy is None:
         return vips_slide
 

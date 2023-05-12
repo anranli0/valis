@@ -793,7 +793,7 @@ class Slide(object):
 
     @valtils.deprecated_args(crop_to_overlap="crop")
     def warp_slide(self, level, non_rigid=True, crop=True,
-                   src_f=None, interp_method="bicubic"):
+                   src_f=None, interp_method="bicubic", shrink=False):
         """Warp a slide using registration parameters
 
         Parameters
@@ -872,7 +872,8 @@ class Slide(object):
                                               dxdy=bk_dxdy, level=level, series=self.series,
                                               interp_method=interp_method,
                                               bbox_xywh=slide_bbox_xywh,
-                                              bg_color=bg_color)
+                                              bg_color=bg_color,
+                                              shrink=shrink)
         return warped_slide
 
     @valtils.deprecated_args(perceputally_uniform_channel_colors="colormap")
@@ -881,7 +882,7 @@ class Slide(object):
                             channel_names=None,
                             colormap=None,
                             interp_method="bicubic",
-                            tile_wh=None, compression="lzw"):
+                            tile_wh=None, compression="lzw", shrink=False):
 
         """Warp and save a slide
 
@@ -935,8 +936,8 @@ class Slide(object):
         """
 
         warped_slide = self.warp_slide(level=level, non_rigid=non_rigid,
-                                       crop=crop,
-                                       interp_method=interp_method)
+                                       crop=crop, src_f=src_f,
+                                       interp_method=interp_method, shrink=shrink)
 
         # Get ome-xml #
         slide_meta = self.reader.metadata
@@ -2016,7 +2017,7 @@ class Valis(object):
 
         return ref_slide
 
-    def convert_imgs(self, series=None, reader_cls=None):
+    def convert_imgs(self, series=None, reader_cls=None, shrink=False):
         """Convert slides to images and create dictionary of Slides.
 
         series : int, optional
@@ -2045,16 +2046,16 @@ class Valis(object):
 
             vips_img = reader.slide2vips(level=level)
 
-            scaling = np.min(self.max_image_dim_px/np.array([vips_img.width, vips_img.height]))
-            if scaling < 1:
-                vips_img = warp_tools.rescale_img(vips_img, scaling)
-
-            # XXX shrink mif patch
-            if f.endswith('.tif'):
+            # XXX shrink mif patch thumbnail
+            if shrink and f.endswith('.tif') and min(vips_img.width, vips_img.height) < 20000:
                 resized_img = vips_img.resize(0.5)
                 padding_left = (vips_img.width - resized_img.width) // 2
                 padding_top = (vips_img.height - resized_img.height) // 2
                 vips_img = resized_img.embed(padding_left, padding_top, vips_img.width, vips_img.height, extend='background', background=0)
+
+            scaling = np.min(self.max_image_dim_px/np.array([vips_img.width, vips_img.height]))
+            if scaling < 1:
+                vips_img = warp_tools.rescale_img(vips_img, scaling)
 
             img = warp_tools.vips2numpy(vips_img)
 
@@ -2271,6 +2272,14 @@ class Valis(object):
             if scaling < 1:
                 processed_img = warp_tools.rescale_img(processed_img, scaling)
 
+            if slide_obj.src_f.endswith('.tif'):
+                # XXX rescale pixel value range
+                img_cap = np.minimum(processed_img, 180)
+                min_value = np.min(img_cap)
+                max_value = np.max(img_cap)
+                processed_img = (img_cap - min_value) * (255 / (max_value - min_value))
+                processed_img = processed_img.astype(np.uint8)
+
             if slide_obj.anno_f:
                 annotation = self.annotation2mask(slide_obj.anno_f,
                                                 slide_obj.slide_dimensions_wh, 
@@ -2306,7 +2315,6 @@ class Valis(object):
                         df_all = pd.concat(dfs, ignore_index=True)
                         
                         df_all.to_csv(fout, index=False)
-                        np.save(root + '_mask.npy', resized_mask)
 
                 if not np.all(mask.shape == processed_img.shape[0:2]):
                     mask = warp_tools.resize_img(mask, processed_img.shape[0:2], interp_method="nearest")
@@ -2328,13 +2336,13 @@ class Valis(object):
             else:
                 mask = np.full(processed_img.shape, 255, dtype=np.uint8)
 
-            slide_obj.rigid_reg_mask = mask
-            slide_obj.processed_img = processed_img
-
             processed_f_out = os.path.join(self.processed_dir, slide_obj.name + ".png")
-            slide_obj.processed_img_f = processed_f_out
-            slide_obj.processed_img_shape_rc = np.array(processed_img.shape[0:2])
             warp_tools.save_img(processed_f_out, processed_img)
+
+            slide_obj.rigid_reg_mask = mask
+            slide_obj.processed_img = processed_img  
+            slide_obj.processed_img_f = processed_f_out
+            slide_obj.processed_img_shape_rc = np.array(processed_img.shape[0:2])        
 
             img_for_stats = processed_img.reshape(-1)
 
@@ -2366,7 +2374,6 @@ class Valis(object):
                 denoise_mask[r0:r1, c0:c1] = 255
             else:
                 denoise_mask = slide_obj.rigid_reg_mask
-
             denoised = preprocessing.denoise_img(slide_obj.processed_img, mask=denoise_mask)
             warp_tools.save_img(slide_obj.processed_img_f, denoised)
 
@@ -3129,7 +3136,10 @@ class Valis(object):
                 processed_img[np_mask==0] = 0
 
                 # Normalize images using stats collected for rigid registration #
-                warped_img = preprocessing.norm_img_stats(processed_img, self.target_processing_stats, mask=slide_mask)
+                if self.norm_method == "histo_match":
+                    warped_img = preprocessing.match_histograms(processed_img, self.target_processing_stats)
+                elif self.norm_method == "img_stats":
+                    warped_img = preprocessing.norm_img_stats(processed_img, self.target_processing_stats, mask=slide_mask)
                 warped_img = exposure.rescale_intensity(warped_img, out_range=(0, 255)).astype(np.uint8)
 
             else:
@@ -3534,7 +3544,7 @@ class Valis(object):
                  brightfield_processing_kwargs=DEFAULT_BRIGHTFIELD_PROCESSING_ARGS,
                  if_processing_cls=DEFAULT_FLOURESCENCE_CLASS,
                  if_processing_kwargs=DEFAULT_FLOURESCENCE_PROCESSING_ARGS,
-                 reader_cls=None):
+                 reader_cls=None, shrink=False):
 
         """Register a collection of images
 
@@ -3644,7 +3654,7 @@ class Valis(object):
         self.start_time = time()
         try:
             print("\n==== Converting images\n")
-            self.convert_imgs(series=self.series, reader_cls=reader_cls)
+            self.convert_imgs(series=self.series, reader_cls=reader_cls, shrink=shrink)
 
             print("\n==== Processing images\n")
             self.brightfield_procsseing_fxn_str = brightfield_processing_cls.__name__
