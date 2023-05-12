@@ -1,6 +1,33 @@
 Change Log
 **********
 
+Version 1.0.0rc15 (May 10, 2023)
+-------------------------------------
+#. Added import for :code:`aicspylibczi.CziFile` in :code:`slide_io` (found in github issue 44). Also added :code:`aicspylibczi` to the poetry lock file.
+#. Added :code:`src_f` argument in :code:`Slide.warp_and_save_slide`. Previously would end up using the :code:`Slide.src_f`, and preventing one from being able to warp and save other images using the same transformations (github issue 49).
+#. Various bug fixes to allow the initial non-rigid registration to work with larger images (which may be :code:`pyvips.Image` objects).
+#. Fixed bug where errors that occurred while reading images would prevent Python from shutting down.
+#. Updated documentation for :code:`valis.preprocessing`
+#. Added more tests
+#. Fixed many typos in the documentation.
+
+Version 1.0.0rc14 (April 24, 2023)
+-------------------------------------
+#. Added :code:`max_ratio` as an argument for :code:`feature_matcher.match_desc_and_kp` (github issue 36).
+#. Added :code:`CziJpgxrReader` to read CZI images that have JPGXR compression but can't be opened with Bioformats. It's very limited and experimental (only tested with single scence RGB), but may be an issue specific to Apple silcon?
+#. Supports scenario where images might be assigned the same name (e.g. same file names, but different directories).
+#. Support tiling for initial non-rigid registration, making it possible to perform non-rigid on much larger images
+#. Skips empty images (github issue 44).
+#. Can now specify an :code:`ImageProcesser` for each image by passing a dicitonary to the :code:`processor_dict` argrument of :code:`Valis.register`. Keys should be the filename of the image, and values a list, where the first element is the :code:`ImageProcesser` to use, and the second element is a dictionary of keyword argruments passed to :code:`ImageProcesser.process_image`. This should make it easier to register different image modalities.
+#. Added an H&E color deconvolution :code:`ImageProcesser` using the method described in M. Macenko et al., ISBI 2009. Generously provided by Github user aelskens (Arthur Elskenson) (PR 42).
+#. Small improvements in :code:`valtils` functions, provided by Github user ajinkya-kulkarni (Ajinkya Kulkarni) (PR 46).
+#. Docker Images bundled with bioformats jar file, so does not require internet connection or Maven. Also now checks for bioformats jar in valis folder
+#. Fixed bug that threw error when trying to warp an empty Shapely polygon
+#. Fixed bug in micro-registration, related to trying to combine numpy and pyvips images (github issues 40 and 47)
+#. Fixed typo in "max_non_rigid_registration_dim_px", which was "max_non_rigid_registartion_dim_px" (github issue 39)
+#. Fixed error that caused excessive memory consumption when trying to mask numpy array with pyvips image in :code:`preprocessing.norm_img_stats`
+
+
 Version 1.0.0rc13 (January 31, 2023)
 -------------------------------------
 #. Now available as a Docker image

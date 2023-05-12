@@ -1,4 +1,5 @@
-FROM ubuntu:lunar as builder
+FROM ubuntu:kinetic as builder
+# Using kinetic to get Python 3.10, used by Poetry
 
 ARG WKDIR=/usr/local/src
 WORKDIR ${WKDIR}
@@ -16,7 +17,9 @@ RUN apt-get update \
 		python3-pip \
 		bc \
 		wget \
-		ca-certificates
+		ca-certificates \
+		git-all \
+		cmake
 
 
 # we need meson for libvips build
@@ -38,6 +41,7 @@ RUN apt-get install --no-install-recommends -y \
 	libopenslide-dev
 
 
+RUN update-ca-certificates
 # Install libvips from source to get latest version
 ENV LD_LIBRARY_PATH /usr/local/lib
 ENV PKG_CONFIG_PATH /usr/local/lib/pkgconfig
@@ -63,12 +67,31 @@ RUN rm -r vips-${VIPS_VERSION}
 # Install python packages using poetry
 COPY . .
 
-
+RUN pip3 install --upgrade pip
 RUN pip3 install poetry && poetry config virtualenvs.in-project true
+
+
+RUN pip3 install poetry
+RUN poetry remove aicspylibczi
 RUN poetry install --only main
 
 # Set path to use .venv Python
 ENV PATH="${WKDIR}/.venv/bin:$PATH"
+
+# Install python packages that can't be installed with poetry/pip (pep517)
+RUN . .venv/bin/activate
+ARG CZI_DIR=./aicspylibczi
+RUN git config --global http.sslVerify false
+RUN git clone https://github.com/AllenCellModeling/aicspylibczi.git ${CZI_DIR} --recurse-submodules
+WORKDIR ${CZI_DIR}
+RUN pip install -e .[dev] # for development (-e means editable so changes take effect when made)
+
+WORKDIR ${WKDIR}
+
+
+# Install bioformats.jar in valis
+ARG BF_VERSION=6.12.0
+RUN wget https://downloads.openmicroscopy.org/bio-formats/${BF_VERSION}/artifacts/bioformats_package.jar -P valis
 
 # Clean up
 RUN  apt-get remove -y wget build-essential ninja-build && \
@@ -79,8 +102,8 @@ RUN  apt-get remove -y wget build-essential ninja-build && \
   rm -rf /usr/local/lib/python*
 
 
-# Copy over only what is needed to run, but not build, the package. Saves about 0.75GB
-FROM ubuntu:lunar
+# Copy over only what is needed to run, but not build, the package.
+FROM ubuntu:kinetic
 
 ARG WKDIR=/usr/local/src
 WORKDIR ${WKDIR}
@@ -107,10 +130,10 @@ RUN apt-get update \
 	liblcms2-dev \
 	libheif-dev \
 	liborc-dev \
-    libgirepository1.0-dev \
-	libopenslide-dev
+	libgirepository1.0-dev \
+	libopenslide-dev \
+	libjxr-dev
 
 # Install other non-Python dependencies
 RUN apt-get install -y \
- 	maven \
     openjdk-11-jre

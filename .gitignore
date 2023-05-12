@@ -133,6 +133,9 @@ venv.bak/
 .vscode/
 .vscode/**
 
+# VS code devcontainer settings
+.devcontainer/
+.devcontainer/**
 
 #PyCharm project settings
 .idea/
@@ -165,7 +168,16 @@ cython_debug/
 # End of https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks
 examples/expected_results/registration/cycif/data/cycif_registrar.pickle
 examples/expected_results/registration/ihc/data/ihc_registrar.pickle
+examples/expected_results/registered_slides
+tests/tmp39
+tests/tmp310
+tests/test_difficult_cases.py
+tests/test_read_czi_jpgxr.py
+tests/test_tiler.py
 
 docs/html/
 
 .DS_Store
+
+valis.zip
+
